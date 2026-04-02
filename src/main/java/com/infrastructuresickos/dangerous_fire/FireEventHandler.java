@@ -102,7 +102,7 @@ public class FireEventHandler {
     @SubscribeEvent
     public void onLevelTick(TickEvent.LevelTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-        if (!(event.level instanceof Level level)) return;
+        Level level = event.level;
         if (level.isClientSide()) return;
 
         Set<BlockPos> fireSet = fires(level);
