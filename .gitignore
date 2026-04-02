@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# Run directories
+run/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Generated resources
+src/generated/
+
+# Forge
+forge*.jar

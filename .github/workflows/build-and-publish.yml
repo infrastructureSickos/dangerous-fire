@@ -1,0 +1,163 @@
+name: Build and Publish
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      mod_version: ${{ steps.props.outputs.mod_version }}
+      jar_name: ${{ steps.build.outputs.jar_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read mod version
+        id: props
+        run: |
+          MOD_VERSION=$(grep '^mod_version=' gradle.properties | cut -d= -f2)
+          echo "mod_version=${MOD_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build jar
+        id: build
+        run: |
+          ./gradlew build
+          JAR_NAME=$(ls build/libs/dangerous-fire-*.jar | grep -v sources | head -1 | xargs basename)
+          echo "jar_name=${JAR_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dangerous-fire-jar
+          path: build/libs/dangerous-fire-${{ steps.props.outputs.mod_version }}.jar
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      modrinth_version_id: ${{ steps.publish.outputs.modrinth_version_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download jar artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dangerous-fire-jar
+          path: build/libs/
+
+      - name: Publish to Modrinth
+        id: publish
+        env:
+          MODRINTH_API_TOKEN: ${{ secrets.MODRINTH_API_TOKEN }}
+          MOD_VERSION: ${{ needs.build.outputs.mod_version }}
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          JAR_FILE="build/libs/dangerous-fire-${MOD_VERSION}.jar"
+
+          DATA=$(python3 -c "
+          import json
+          data = {
+              'name': 'DangerousFire ${TAG}',
+              'version_number': '${TAG}',
+              'version_type': 'release',
+              'project_id': 'dangerous-fire',
+              'dependencies': [],
+              'game_versions': ['1.20.1'],
+              'loaders': ['forge'],
+              'featured': True,
+              'file_parts': ['jar']
+          }
+          print(json.dumps(data))
+          ")
+
+          RESPONSE=$(curl -sf \
+            -H "Authorization: ${MODRINTH_API_TOKEN}" \
+            -F "data=${DATA}" \
+            -F "jar=@${JAR_FILE};type=application/java-archive" \
+            "https://api.modrinth.com/v2/version")
+
+          MODRINTH_VERSION_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Published to Modrinth: version_id=${MODRINTH_VERSION_ID}"
+          echo "modrinth_version_id=${MODRINTH_VERSION_ID}" >> "$GITHUB_OUTPUT"
+
+  update-modpack:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout server repo
+        uses: actions/checkout@v4
+        with:
+          repository: infrastructureSickos/server
+          token: ${{ secrets.INFRA_BOT_PAT }}
+          path: server
+
+      - name: Update mods-list.json
+        env:
+          MODRINTH_VERSION_ID: ${{ needs.publish.outputs.modrinth_version_id }}
+        run: |
+          set -euo pipefail
+          cd server
+
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          version_id = os.environ['MODRINTH_VERSION_ID']
+          path = 'mods-list.json'
+
+          with open(path) as f:
+              mods = json.load(f)
+
+          entry_found = False
+          for mod in mods:
+              if mod.get('modrinth_project_id') == 'dangerous-fire':
+                  mod['version_id'] = version_id
+                  entry_found = True
+                  break
+
+          if not entry_found:
+              mods.append({
+                  'name': 'Dangerous Fire',
+                  'modrinth_project_id': 'dangerous-fire',
+                  'version_id': version_id
+              })
+              print(f'Added new entry for dangerous-fire: {version_id}')
+          else:
+              print(f'Updated dangerous-fire to version_id: {version_id}')
+
+          with open(path, 'w') as f:
+              json.dump(mods, f, indent=2)
+              f.write('\n')
+          PYEOF
+
+      - name: Commit and push
+        env:
+          MODRINTH_VERSION_ID: ${{ needs.publish.outputs.modrinth_version_id }}
+        run: |
+          cd server
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add mods-list.json
+          git commit -m "chore: update dangerous-fire to modrinth version ${MODRINTH_VERSION_ID}"
+          git push
