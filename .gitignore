@@ -1,0 +1,9 @@
+.gradle/
+build/
+out/
+run/
+.idea/
+*.iml
+.vscode/
+src/generated/
+forge*.jar
