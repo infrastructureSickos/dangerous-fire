@@ -106,58 +106,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - name: Checkout server repo
-        uses: actions/checkout@v4
+      - name: Trigger modpack update
+        uses: peter-evans/repository-dispatch@v3
         with:
-          repository: infrastructureSickos/server
-          token: ${{ secrets.INFRA_BOT_PAT }}
-          path: server
-
-      - name: Update mods-list.json
-        env:
-          MODRINTH_VERSION_ID: ${{ needs.publish.outputs.modrinth_version_id }}
-        run: |
-          set -euo pipefail
-          cd server
-
-          python3 - <<'PYEOF'
-          import json, os, sys
-
-          version_id = os.environ['MODRINTH_VERSION_ID']
-          path = 'mods-list.json'
-
-          with open(path) as f:
-              mods = json.load(f)
-
-          entry_found = False
-          for mod in mods:
-              if mod.get('modrinth_project_id') == 'IhcasjUE':
-                  mod['version_id'] = version_id
-                  entry_found = True
-                  break
-
-          if not entry_found:
-              mods.append({
-                  'name': 'Dangerous Fire',
-                  'modrinth_project_id': 'IhcasjUE',
-                  'version_id': version_id
-              })
-              print(f'Added new entry for dangerous-fire: {version_id}')
-          else:
-              print(f'Updated dangerous-fire (IhcasjUE) to version_id: {version_id}')
-
-          with open(path, 'w') as f:
-              json.dump(mods, f, indent=2)
-              f.write('\n')
-          PYEOF
-
-      - name: Commit and push
-        env:
-          MODRINTH_VERSION_ID: ${{ needs.publish.outputs.modrinth_version_id }}
-        run: |
-          cd server
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add mods-list.json
-          git commit -m "chore: update dangerous-fire to modrinth version ${MODRINTH_VERSION_ID}"
-          git push
+          token: ${{ secrets.MODPACK_DISPATCH_TOKEN }}
+          repository: infrastructureSickos/minecraft-modpack
+          event-type: dangerous-fire-updated
+          client-payload: '{"version": "${{ github.ref_name }}"}'
